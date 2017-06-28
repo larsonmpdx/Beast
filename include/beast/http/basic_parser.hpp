@@ -17,6 +17,7 @@
 #include <boost/asio/buffer.hpp>
 #include <boost/optional.hpp>
 #include <boost/assert.hpp>
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -105,29 +106,47 @@ class basic_parser
     static unsigned constexpr flagUpgrade               = 1<< 12;
     static unsigned constexpr flagFinalChunk            = 1<< 13;
 
-    std::uint64_t len_;     // size of chunk or body
-    std::unique_ptr<char[]> buf_;
-    std::size_t buf_len_ = 0;
-    std::size_t skip_ = 0;  // search from here
-    state state_ = state::nothing_yet;
-    unsigned f_ = 0;        // flags
+    static
+    std::uint64_t
+    default_limit(std::true_type)
+    {
+        // limit for requests
+        return 1 * 1024 * 1024; // 1MB
+    }
+
+    static
+    std::uint64_t
+    default_limit(std::false_type)
+    {
+        // limit for responses
+        return 8 * 1024 * 1024; // 8MB
+    }
+
+    std::uint64_t limit_;           // max payload body
+    std::uint64_t len_;             // size of chunk or body
+    std::unique_ptr<char[]> buf_;   // temp storage
+    std::size_t buf_len_ = 0;       // size of buf_
+    std::size_t skip_ = 0;          // resume search here
+    state state_ =                  // initial state
+        state::nothing_yet;
+    unsigned f_ = 0;                // flags
 
 public:
+    /// `true` if this parser parses requests, `false` for responses.
+    using is_request =
+        std::integral_constant<bool, isRequest>;
+
     /// Copy constructor (disallowed)
     basic_parser(basic_parser const&) = delete;
 
     /// Copy assignment (disallowed)
     basic_parser& operator=(basic_parser const&) = delete;
 
-    /// Default constructor
-    basic_parser() = default;
-
-    /// `true` if this parser parses requests, `false` for responses.
-    using is_request =
-        std::integral_constant<bool, isRequest>;
-
     /// Destructor
     ~basic_parser() = default;
+
+    /// Default constructor
+    basic_parser();;
 
     /** Move constructor
 
@@ -302,6 +321,43 @@ public:
     */
     void
     skip(bool v);
+
+    /** Set the limit on the payload body.
+
+        This function sets the maximum allowed size of the payload body,
+        before any encodings except chunked have been removed. Depending
+        on the message semantics, one of these cases will apply:
+
+        @li The Content-Length is specified and exceeds the limit. In
+        this case the result @ref error::body_limit is returned
+        immediately after the header is parsed.
+
+        @li The Content-Length is unspecified and the chunked encoding
+        is not specified as the last encoding. In this case the end of
+        message is determined by the end of file indicator on the
+        associated stream or input source. If a sufficient number of
+        body payload octets are presented to the parser to exceed the
+        configured limit, the parse fails with the result
+        @ref error::body_limit
+
+        @li The Transfer-Encoding specifies the chunked encoding as the
+        last encoding. In this case, when the number of payload body
+        octets produced by removing the chunked encoding  exceeds
+        the configured limit, the parse fails with the result
+        @ref error::body_limit.
+        
+        Setting the limit after any call to @ref put has taken place
+        results in undefined behavior.
+
+        The default limit is 1MB for requests and 8MB for responses.
+
+        @param v The payload body limit to set
+    */
+    void
+    limit(std::uint64_t v)
+    {
+        limit_ = v;
+    }
 
     /** Write a buffer sequence to the parser.
 

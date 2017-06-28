@@ -923,6 +923,54 @@ public:
         BEAST_EXPECT(p.body == "*****");
     }
 
+    void
+    testLimit()
+    {
+        {
+            multi_buffer b;
+            ostream(b) << 
+                "POST / HTTP/1.1\r\n"
+                "Content-Length: 2\r\n"
+                "\r\n"
+                "**";
+            error_code ec;
+            test_parser<true> p;
+            p.limit(1);
+            p.eager(true);
+            p.put(b.data(), ec);
+            BEAST_EXPECTS(ec == error::body_limit, ec.message());
+        }
+        {
+            multi_buffer b;
+            ostream(b) << 
+                "HTTP/1.1 200 OK\r\n"
+                "\r\n"
+                "**";
+            error_code ec;
+            test_parser<false> p;
+            p.limit(1);
+            p.eager(true);
+            p.put(b.data(), ec);
+            BEAST_EXPECTS(ec == error::body_limit, ec.message());
+        }
+        {
+            multi_buffer b;
+            ostream(b) << 
+                "POST / HTTP/1.1\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "\r\n"
+                "2\r\n"
+                "**\r\n"
+                "0\r\n\r\n";
+            error_code ec;
+            test_parser<true> p;
+            p.limit(1);
+            p.eager(true);
+            p.put(b.data(), ec);
+            BEAST_EXPECTS(ec == error::body_limit, ec.message());
+        }
+    }
+
     //--------------------------------------------------------------------------
 
     template<bool isRequest, class Derived>
@@ -1088,6 +1136,7 @@ public:
         testUpgradeField();
         testBody();
         testSplit();
+        testLimit();
         testIssue430();
         testIssue452();
         testIssue496();
