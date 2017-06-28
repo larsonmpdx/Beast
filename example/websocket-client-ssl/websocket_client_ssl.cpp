@@ -14,12 +14,22 @@
 #include <iostream>
 #include <string>
 
+namespace ip = boost::asio::ip; // from <boost/asio.hpp>
 using tcp = boost::asio::ip::tcp; // from <boost/asio.hpp>
 namespace ssl = boost::asio::ssl; // from <boost/asio/ssl.hpp>
-namespace websocket = beast::websocket; // from <beast/websocket.hpp>
+namespace http = beast::http; // from <beast/http.hpp>
 
-int main()
+int main(int argc, char** argv)
 {
+    // Check command line arguments.
+    if(argc != 3)
+    {
+        std::cerr << "Usage: " << argv[0] << " <address> <port>\n";
+        return EXIT_FAILURE;
+    }
+    auto address = ip::address::from_string(argv[1]);
+    unsigned short port = static_cast<unsigned short>(std::atoi(argv[2]));
+
     // A helper for reporting errors
     auto const fail =
         [](std::string what, beast::error_code ec)
@@ -36,14 +46,8 @@ int main()
     tcp::resolver r{ios};
     tcp::socket sock{ios};
 
-    // Look up the domain name
-    std::string const host = "echo.websocket.org";
-    auto const lookup = r.resolve({host, "https"}, ec);
-    if(ec)
-        return fail("resolve", ec);
-
     // Make the connection on the IP address we get from a lookup
-    boost::asio::connect(sock, lookup, ec);
+    sock.connect(tcp::endpoint{address, port}, ec);
     if(ec)
         return fail("connect", ec);
 
@@ -58,53 +62,27 @@ int main()
     if(ec)
         return fail("ssl handshake", ec);
 
-    // Now wrap the handshaked SSL stream in a websocket stream
-    websocket::stream<stream_type&> ws{stream};
-
-    // Perform the websocket handshake
-    ws.handshake(host, "/", ec);
-    if(ec)
-        return fail("handshake", ec);
-
-    // Send a message
-    ws.write(boost::asio::buffer("Hello, world!"), ec);
+    beast::multi_buffer b1, b2;
+    beast::ostream(b1) <<
+        "GET / HTTP/1.1\r\n"
+        "Host: [host]\r\n"
+        "User-Agent: Beast\r\n"
+        "Accept: */*\r\n";
+    beast::ostream(b2) <<
+        "Connection: Upgrade\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n";
+    boost::asio::write(stream, buffer_cat(b1.data(), b2.data()), ec);
     if(ec)
         return fail("write", ec);
 
-    // This buffer will hold the incoming message
-    beast::multi_buffer b;
-
-    // Read the message into our buffer
-    ws.read(b, ec);
+    http::response<http::string_body> res;
+    beast::flat_buffer b;
+    http::read(stream, b, res, ec);
     if(ec)
         return fail("read", ec);
-
-    // Send a "close" frame to the other end, this is a websocket thing
-    ws.close(websocket::close_code::normal, ec);
-    if(ec)
-        return fail("close", ec);
-
-    // The buffers() function helps print a ConstBufferSequence
-    std::cout << beast::buffers(b.data()) << std::endl;
-
-    // WebSocket says that to close a connection you have
-    // to keep reading messages until you receive a close frame.
-    // Beast delivers the close frame as an error from read.
-    //
-    beast::drain_buffer drain; // Throws everything away efficiently
-    for(;;)
-    {
-        // Keep reading messages...
-        ws.read(drain, ec);
-
-        // ...until we get the special error code
-        if(ec == websocket::error::closed)
-            break;
-
-        // Some other error occurred, report it and exit.
-        if(ec)
-            return fail("close", ec);
-    }
-
+    std::cout << res.base() << std::endl;
     return EXIT_SUCCESS;
 }
