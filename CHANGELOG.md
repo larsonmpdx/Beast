@@ -2,6 +2,7 @@ Version 70:
 
 * Serialize in one step when possible
 * Add basic_parser::limit to set a payload body limit
+* Add parser::on_header to set a callback
 
 API Changes:
 
