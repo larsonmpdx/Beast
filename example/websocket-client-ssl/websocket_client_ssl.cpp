@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <beast/core/buffered_write_stream.hpp>
 
 namespace ip = boost::asio::ip; // from <boost/asio.hpp>
 using tcp = boost::asio::ip::tcp; // from <boost/asio.hpp>
@@ -52,7 +53,9 @@ int main(int argc, char** argv)
         return fail("connect", ec);
 
     // Wrap the now-connected socket in an SSL stream
-    using stream_type = ssl::stream<tcp::socket&>;
+    //using stream_type = ssl::stream<tcp::socket&>;
+    using stream_type = boost::asio::ssl::stream<beast::buffered_write_stream<boost::asio::ip::tcp::socket, beast::multi_buffer>>;
+
     ssl::context ctx{ssl::context::sslv23};
     stream_type stream{sock, ctx};
     stream.set_verify_mode(ssl::verify_none);
@@ -74,7 +77,7 @@ int main(int argc, char** argv)
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         "\r\n";
-    boost::asio::write(stream, buffer_cat(b1.data(), b2.data()), ec);
+    boost::asio::write(stream, beast::buffer_cat(b1.data(), b2.data()), ec);
     if(ec)
         return fail("write", ec);
 
