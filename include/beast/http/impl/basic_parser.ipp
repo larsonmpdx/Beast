@@ -56,11 +56,19 @@ skip_ows_rev2(
 } // detail
 
 template<bool isRequest, class Derived>
+basic_parser<isRequest, Derived>::
+basic_parser()
+    : limit_(default_limit(is_request{}))
+{
+}
+
+template<bool isRequest, class Derived>
 template<class OtherDerived>
 basic_parser<isRequest, Derived>::
 basic_parser(basic_parser<
         isRequest, OtherDerived>&& other)
-    : len_(other.len_)
+    : limit_(other.limit_)
+    , len_(other.len_)
     , buf_(std::move(other.buf_))
     , buf_len_(other.buf_len_)
     , skip_(other.skip_)
@@ -528,6 +536,12 @@ basic_parser<isRequest, Derived>::
 parse_body_to_eof(char const*& p,
     std::size_t n, error_code& ec)
 {
+    if(n > limit_)
+    {
+        ec = error::body_limit;
+        return;
+    }
+    limit_ = limit_ - n;
     impl().on_data(string_view{p, n}, ec);
     if(ec)
         return;
@@ -596,6 +610,12 @@ parse_chunk_header(char const*& p0,
         }
         if(v != 0)
         {
+            if(v > limit_)
+            {
+                ec = error::body_limit;
+                return;
+            }
+            limit_ -= v;
             if(*p == ';')
             {
                 // VFALCO TODO Validate extension
@@ -865,6 +885,12 @@ do_field(field f,
             value.begin(), value.end(), v))
         {
             ec = error::bad_content_length;
+            return;
+        }
+
+        if(v > limit_)
+        {
+            ec = error::body_limit;
             return;
         }
 

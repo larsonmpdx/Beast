@@ -1,14 +1,18 @@
 Version 70:
 
 * Serialize in one step when possible
+* Add basic_parser::limit to set a payload body limit
 
 API Changes:
 
 * Rename to message::base
+* basic_parser default limits are now 1MB/8MB
 
 Actions Required:
 
 * Change calls to message::header_part() with message::base()
+* Call basic_parser::limit as needed to adjust the message body limit
+  to a suitable value if the defaults are not sufficient.
 
 --------------------------------------------------------------------------------
 
