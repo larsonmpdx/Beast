@@ -5,8 +5,8 @@
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
 
-#ifndef BEAST_BUFFERED_WRITE_STREAM_HPP
-#define BEAST_BUFFERED_WRITE_STREAM_HPP
+#ifndef BEAST_EXAMPLE_FLAT_WRITE_STREAM_HPP
+#define BEAST_EXAMPLE_FLAT_WRITE_STREAM_HPP
 
 #include <beast/config.hpp>
 #include <beast/core/async_result.hpp>
@@ -74,8 +74,7 @@ namespace beast {
     @tparam DynamicBuffer The type of stream buffer to use.
 */
     template<class Stream, class DynamicBuffer>
-    class buffered_write_stream
-    {
+    class flat_write_stream {
         static_assert(is_dynamic_buffer<DynamicBuffer>::value,
                       "DynamicBuffer requirements not met");
 
@@ -102,53 +101,48 @@ namespace beast {
             @note The behavior of move assignment on or from streams
             with active or pending operations is undefined.
         */
-        buffered_write_stream(buffered_write_stream&&) = default;
+        flat_write_stream(flat_write_stream &&) = default;
 
         /** Move assignment.
             @note The behavior of move assignment on or from streams
             with active or pending operations is undefined.
         */
-        buffered_write_stream& operator=(buffered_write_stream&&) = default;
+        flat_write_stream &operator=(flat_write_stream &&) = default;
 
         /** Construct the wrapping stream.
             @param args Parameters forwarded to the `Stream` constructor.
         */
         template<class... Args>
         explicit
-        buffered_write_stream(Args&&... args);
+        flat_write_stream(Args &&... args);
 
         /// Get a reference to the next layer.
-        next_layer_type&
-        next_layer()
-        {
+        next_layer_type &
+        next_layer() {
             return next_layer_;
         }
 
         /// Get a const reference to the next layer.
-        next_layer_type const&
-        next_layer() const
-        {
+        next_layer_type const &
+        next_layer() const {
             return next_layer_;
         }
 
         /// Get a reference to the lowest layer.
-        lowest_layer_type&
-        lowest_layer()
-        {
+        lowest_layer_type &
+        lowest_layer() {
             return next_layer_.lowest_layer();
         }
 
         /// Get a const reference to the lowest layer.
-        lowest_layer_type const&
-        lowest_layer() const
-        {
+        lowest_layer_type const &
+        lowest_layer() const {
             return next_layer_.lowest_layer();
         }
 
         /// Get the io_service associated with the object.
-        boost::asio::io_service&
-        get_io_service()
-        {
+        boost::asio::io_service &
+        get_io_service() {
             return next_layer_.get_io_service();
         }
 
@@ -158,16 +152,14 @@ namespace beast {
             by causing the internal buffer size to increase beyond
             the caller defined maximum.
         */
-        DynamicBuffer&
-        buffer()
-        {
+        DynamicBuffer &
+        buffer() {
             return sb_;
         }
 
         /// Access the internal buffer
-        DynamicBuffer const&
-        buffer() const
-        {
+        DynamicBuffer const &
+        buffer() const {
             return sb_;
         }
 
@@ -183,8 +175,7 @@ namespace beast {
             than the amount of data in the buffer, no bytes are discarded.
         */
         void
-        capacity(std::size_t size)
-        {
+        capacity(std::size_t size) {
             capacity_ = size;
         }
 
@@ -198,7 +189,7 @@ namespace beast {
         */
         template<class MutableBufferSequence>
         std::size_t
-        read_some(MutableBufferSequence const& buffers);
+        read_some(MutableBufferSequence const &buffers);
 
         /** Read some data from the stream.
             This function is used to read data from the stream.
@@ -210,8 +201,8 @@ namespace beast {
         */
         template<class MutableBufferSequence>
         std::size_t
-        read_some(MutableBufferSequence const& buffers,
-                  error_code& ec);
+        read_some(MutableBufferSequence const &buffers,
+                  error_code &ec);
 
         /** Start an asynchronous read.
             This function is used to asynchronously read data from
@@ -239,8 +230,8 @@ namespace beast {
 #else
         async_return_type<ReadHandler, void(error_code)>
 #endif
-        async_read_some(MutableBufferSequence const& buffers,
-                        ReadHandler&& handler);
+        async_read_some(MutableBufferSequence const &buffers,
+                        ReadHandler &&handler);
 
         /** Write some data to the stream.
             This function is used to write data to the stream.
@@ -252,8 +243,7 @@ namespace beast {
         */
         template<class ConstBufferSequence>
         std::size_t
-        write_some(ConstBufferSequence const& buffers)
-        {
+        write_some(ConstBufferSequence const &buffers) {
             static_assert(is_sync_write_stream<next_layer_type>::value,
                           "SyncWriteStream requirements not met");
             return next_layer_.write_some(buffers);
@@ -269,9 +259,8 @@ namespace beast {
         */
         template<class ConstBufferSequence>
         std::size_t
-        write_some(ConstBufferSequence const& buffers,
-                   error_code& ec)
-        {
+        write_some(ConstBufferSequence const &buffers,
+                   error_code &ec) {
             static_assert(is_sync_write_stream<next_layer_type>::value,
                           "SyncWriteStream requirements not met");
             return next_layer_.write_some(buffers, ec);
@@ -303,12 +292,196 @@ namespace beast {
 #else
         async_return_type<WriteHandler, void(error_code)>
 #endif
-        async_write_some(ConstBufferSequence const& buffers,
-                         WriteHandler&& handler);
+        async_write_some(ConstBufferSequence const &buffers,
+                         WriteHandler &&handler);
     };
 
-} // beast
 
-#include <beast/core/impl/buffered_write_stream.ipp>
+    template<class Stream, class DynamicBuffer>
+    template<class MutableBufferSequence, class Handler>
+    class flat_write_stream<
+            Stream, DynamicBuffer>::read_some_op
+    {
+        int step_ = 0;
+        flat_write_stream& s_;
+        MutableBufferSequence b_;
+        Handler h_;
+
+    public:
+        read_some_op(read_some_op&&) = default;
+        read_some_op(read_some_op const&) = default;
+
+        template<class DeducedHandler, class... Args>
+        read_some_op(DeducedHandler&& h,
+                     flat_write_stream& s,
+                     MutableBufferSequence const& b)
+                : s_(s)
+                , b_(b)
+                , h_(std::forward<DeducedHandler>(h))
+        {
+        }
+
+        void
+        operator()(error_code const& ec,
+                   std::size_t bytes_transferred);
+
+        friend
+        void* asio_handler_allocate(
+                std::size_t size, read_some_op* op)
+        {
+            using boost::asio::asio_handler_allocate;
+            return asio_handler_allocate(
+                    size, std::addressof(op->h_));
+        }
+
+        friend
+        void asio_handler_deallocate(
+                void* p, std::size_t size, read_some_op* op)
+        {
+            using boost::asio::asio_handler_deallocate;
+            asio_handler_deallocate(
+                    p, size, std::addressof(op->h_));
+        }
+
+        friend
+        bool asio_handler_is_continuation(read_some_op* op)
+        {
+            using boost::asio::asio_handler_is_continuation;
+            return asio_handler_is_continuation(
+                    std::addressof(op->h_));
+        }
+
+        template<class Function>
+        friend
+        void asio_handler_invoke(Function&& f, read_some_op* op)
+        {
+            using boost::asio::asio_handler_invoke;
+            asio_handler_invoke(f, std::addressof(op->h_));
+        }
+    };
+
+    template<class Stream, class DynamicBuffer>
+    template<class MutableBufferSequence, class Handler>
+    void
+    flat_write_stream<Stream, DynamicBuffer>::
+    read_some_op<MutableBufferSequence, Handler>::operator()(
+            error_code const& ec, std::size_t bytes_transferred)
+    {
+        switch(step_)
+        {
+            case 0:
+                if(s_.sb_.size() == 0)
+                {
+                    if(s_.capacity_ == 0)
+                    {
+                        // read (unbuffered)
+                        step_ = 1;
+                        return s_.next_layer_.async_read_some(
+                                b_, std::move(*this));
+                    }
+
+                    // read
+                    step_ = 2;
+                    return s_.next_layer_.async_read_some(
+                            s_.sb_.prepare(s_.capacity_),
+                            std::move(*this));
+
+                }
+                step_ = 3;
+                s_.get_io_service().post(
+                        bind_handler(std::move(*this), ec, 0));
+                return;
+
+            case 1:
+                // upcall
+                break;
+
+            case 2:
+                s_.sb_.commit(bytes_transferred);
+                BEAST_FALLTHROUGH;
+
+            case 3:
+                bytes_transferred =
+                        boost::asio::buffer_copy(b_, s_.sb_.data());
+                s_.sb_.consume(bytes_transferred);
+                break;
+        }
+        h_(ec, bytes_transferred);
+    }
+
+//------------------------------------------------------------------------------
+
+    template<class Stream, class DynamicBuffer>
+    template<class... Args>
+    flat_write_stream<Stream, DynamicBuffer>::
+    flat_write_stream(Args&&... args)
+            : next_layer_(std::forward<Args>(args)...)
+    {
+    }
+
+    template<class Stream, class DynamicBuffer>
+    template<class ConstBufferSequence, class WriteHandler>
+    auto
+    flat_write_stream<Stream, DynamicBuffer>::
+    async_write_some(ConstBufferSequence const& buffers,
+                     WriteHandler&& handler) ->
+    async_return_type<WriteHandler, void(error_code)>
+    {
+        static_assert(is_async_write_stream<next_layer_type>::value,
+                      "AsyncWriteStream requirements not met");
+        static_assert(is_const_buffer_sequence<
+                              ConstBufferSequence>::value,
+                      "ConstBufferSequence requirements not met");
+        static_assert(is_completion_handler<WriteHandler,
+                              void(error_code, std::size_t)>::value,
+                      "WriteHandler requirements not met");
+        return next_layer_.async_write_some(buffers,
+                                            std::forward<WriteHandler>(handler));
+    }
+
+    template<class Stream, class DynamicBuffer>
+    template<class MutableBufferSequence>
+    std::size_t
+    flat_write_stream<Stream, DynamicBuffer>::
+    read_some(
+            MutableBufferSequence const& buffers)
+    {
+        static_assert(is_sync_read_stream<next_layer_type>::value,
+                      "SyncReadStream requirements not met");
+        return next_layer_.read_some(buffers);
+    }
+
+    template<class Stream, class DynamicBuffer>
+    template<class MutableBufferSequence>
+    std::size_t
+    flat_write_stream<Stream, DynamicBuffer>::
+    read_some(MutableBufferSequence const& buffers,
+              error_code& ec)
+    {
+        static_assert(is_sync_read_stream<next_layer_type>::value,
+                      "SyncReadStream requirements not met");
+        return next_layer_.read_some(buffers, ec);
+    }
+
+    template<class Stream, class DynamicBuffer>
+    template<class MutableBufferSequence, class ReadHandler>
+    auto
+    flat_write_stream<Stream, DynamicBuffer>::
+    async_read_some(MutableBufferSequence const& buffers,
+                    ReadHandler&& handler) ->
+    async_return_type<ReadHandler, void(error_code)>
+    {
+        static_assert(is_async_read_stream<next_layer_type>::value,
+                      "Stream requirements not met");
+        static_assert(is_mutable_buffer_sequence<
+                              MutableBufferSequence>::value,
+                      "MutableBufferSequence requirements not met");
+        static_assert(is_completion_handler<ReadHandler,
+                              void(error_code, std::size_t)>::value,
+                      "ReadHandler requirements not met");
+        return next_layer_.async_read_some(buffers,
+                                            std::forward<ReadHandler>(handler));
+    }
+}
 
 #endif
