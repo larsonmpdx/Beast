@@ -28,8 +28,6 @@ int main(int argc, char** argv)
         std::cerr << "Usage: " << argv[0] << " <address> <port>\n";
         return EXIT_FAILURE;
     }
-    auto address = ip::address::from_string(argv[1]);
-    unsigned short port = static_cast<unsigned short>(std::atoi(argv[2]));
 
     // A helper for reporting errors
     auto const fail =
@@ -47,21 +45,27 @@ int main(int argc, char** argv)
     tcp::resolver r{ios};
     tcp::socket sock{ios};
 
+    // Look up the domain name
+    std::string const host = argv[1];
+    auto const lookup = r.resolve({host, argv[2]}, ec);
+    if(ec)
+        return fail("resolve", ec);
+
     // Make the connection on the IP address we get from a lookup
-    sock.connect(tcp::endpoint{address, port}, ec);
+    boost::asio::connect(sock, lookup, ec);
     if(ec)
         return fail("connect", ec);
 
     // Wrap the now-connected socket in an SSL stream
     //using stream_type = ssl::stream<tcp::socket&>;
-    using stream_type = boost::asio::ssl::stream<beast::flat_write_stream<boost::asio::ip::tcp::socket&>>;
+    using stream_type = beast::flat_write_stream<boost::asio::ssl::stream<boost::asio::ip::tcp::socket&>>;
 
     ssl::context ctx{ssl::context::sslv23};
     stream_type stream{sock, ctx};
-    stream.set_verify_mode(ssl::verify_none);
+    stream.next_layer().set_verify_mode(ssl::verify_none);
 
     // Perform SSL handshaking
-    stream.handshake(ssl::stream_base::client, ec);
+    stream.next_layer().handshake(ssl::stream_base::client, ec);
     if(ec)
         return fail("ssl handshake", ec);
 
