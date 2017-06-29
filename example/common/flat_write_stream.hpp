@@ -337,6 +337,25 @@ public:
 #endif
     async_write_some(ConstBufferSequence const &buffers,
                      WriteHandler &&handler);
+
+    friend
+    void
+    teardown(websocket::teardown_tag,
+             flat_write_stream&, boost::system::error_code& ec)
+    {
+        ec.assign(0, ec.category());
+    }
+
+    template<class TeardownHandler>
+    friend
+    void
+    async_teardown(websocket::teardown_tag,
+                   flat_write_stream& s, TeardownHandler&& handler)
+    {
+        s.get_io_service().post(
+                bind_handler(std::move(handler),
+                             error_code{}));
+    }
 };
 
 template<class Stream>
@@ -485,6 +504,7 @@ async_return_type<ReadHandler, void(error_code)>
     return next_layer_.async_read_some(buffers,
                                         std::forward<ReadHandler>(handler));
 }
+
 }
 
 #endif
