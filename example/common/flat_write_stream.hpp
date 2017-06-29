@@ -77,10 +77,60 @@ class flat_write_stream {
     template<class Buffers, class Handler>
     class write_some_op;
 
-    std::size_t capacity_ = 0;
     Stream next_layer_;
-
     static const std::size_t max_stack_size = 4096;
+
+    /// get length of a buffer sequence
+    template<class ConstBufferSequence>
+    typename std::enable_if<beast::is_const_buffer_sequence<ConstBufferSequence>::value,
+            std::size_t>::type
+    length(ConstBufferSequence const &buffers) {
+        return std::distance(buffers.begin(), buffers.end());
+    }
+
+    /** Return an iterator to the single non zero buffer if it exists.
+        This function returns an iterator to a buffer with a non-zero size if
+        both of the following conditions are met:
+        @li The buffer sequence has a non zero length
+        @li Exactly one buffer in the sequence has a non-zero size
+            Otherwise the function returns `buffers.end()`
+        @param buffers The buffer sequence to search through.
+    */
+    template<class ConstBufferSequence>
+    typename ConstBufferSequence::const_iterator
+    find_single(ConstBufferSequence const &buffers) {
+
+        using boost::asio::buffer_size;
+        auto size = buffer_size(buffers);
+        BOOST_ASSERT(size > 0);
+
+        std::cout << "find_single working on " << length(buffers) << " buffers" << std::endl;
+
+        int num_nonzero = 0;
+        auto found_buffer = buffers.end();
+        for (auto it = buffers.begin(); it != buffers.end(); it++) {
+            if (buffer_size(*it) > 0) {
+                num_nonzero++;
+                found_buffer = it;
+            }
+        }
+        if (num_nonzero == 1) {
+            std::cout << "found a single nonzero buffer" << std::endl;
+            return found_buffer;
+        } else {
+            std::cout << "found multiple nonzero buffers" << std::endl;
+            return buffers.end();
+        }
+    }
+
+    /// given a buffer sequence, flatten it into a single const_buffers_1
+    template<class ConstBufferSequence>
+    boost::asio::const_buffers_1
+    stack_flatten(ConstBufferSequence const &buffers) {
+        char buf[max_stack_size];
+        auto copy_size = boost::asio::buffer_copy(boost::asio::buffer(buf, max_stack_size), buffers);
+        return boost::asio::const_buffers_1(buf, copy_size);
+    }
 
 public:
     /// The type of the next layer.
@@ -138,64 +188,6 @@ public:
     boost::asio::io_service &
     get_io_service() {
         return next_layer_.get_io_service();
-    }
-
-    /** Set the maximum buffer size.
-        This changes the maximum size of the internal buffer used
-        to hold read data. No bytes are discarded by this call. If
-        the buffer size is set to zero, no more data will be buffered.
-        Thread safety:
-            The caller is responsible for making sure the call is
-            made from the same implicit or explicit strand.
-        @param size The number of bytes in the read buffer.
-        @note This is a soft limit. If the new maximum size is smaller
-        than the amount of data in the buffer, no bytes are discarded.
-    */
-    void
-    capacity(std::size_t size) {
-        capacity_ = size;
-    }
-
-    template<class ConstBufferSequence>
-    typename std::enable_if<beast::is_const_buffer_sequence<ConstBufferSequence>::value,
-            std::size_t>::type
-            length(ConstBufferSequence const& buffers) {
-        return std::distance(buffers.begin(), buffers.end());
-    }
-
-    /** Return an iterator to the single non zero buffer if it exists.
-        This function returns an iterator to a buffer with a non-zero size if
-        both of the following conditions are met:
-        @li The buffer sequence has a non zero length
-        @li Exactly one buffer in the sequence has a non-zero size
-            Otherwise the function returns `buffers.end()`
-        @param buffers The buffer sequence to search through.
-    */
-    template<class ConstBufferSequence>
-    typename ConstBufferSequence::const_iterator
-    find_single(ConstBufferSequence const& buffers) {
-        std::cout << "find_single working on " << length(buffers) << " buffers" << std::endl;
-        using boost::asio::buffer_size;
-        if(buffer_size(buffers) > 0) {
-            int num_nonzero = 0;
-            auto found_buffer = buffers.end();
-            for(auto it = buffers.begin(); it != buffers.end(); it++) {
-                if(buffer_size(*it) > 0) {
-                    num_nonzero++;
-                    found_buffer = it;
-                }
-            }
-            if(num_nonzero == 1) {
-                std::cout << "found a single nonzero buffer" << std::endl;
-                return found_buffer;
-            } else {
-                std::cout << "found multiple nonzero buffers" << std::endl;
-                return buffers.end();
-            }
-        } else {
-            std::cout << "buffers empty" << std::endl;
-            return buffers.end();
-        }
     }
 
     /** Read some data from the stream.
@@ -266,26 +258,11 @@ public:
         static_assert(is_sync_write_stream<next_layer_type>::value,
                       "SyncWriteStream requirements not met");
 
-        using boost::asio::buffer_size;
-        if(buffer_size(buffers) > 0) {
-            auto iter = find_single(buffers);
-            if(iter != buffers.end()) {
-                return next_layer_.write_some(boost::asio::const_buffers_1{*iter});
-            }
-            else {
-                if(buffer_size(buffers) <= max_stack_size) {
-                    char buf[max_stack_size];
-                    boost::asio::buffer_copy(boost::asio::buffer(buf), buffers);
-                    return next_layer_.write_some(boost::asio::buffer(buf));
-                } else {
-                    // exceeds stack size - todo
-                    return next_layer_.write_some(buffers);
-                }
-            }
-        }
-        else {
-            return next_layer_.write_some(buffers);
-        }
+        error_code ec;
+        auto size = write_some(buffers, ec);
+        if(ec)
+            BOOST_THROW_EXCEPTION(system_error{ec});
+        return size;
     }
 
     /** Write some data to the stream.
@@ -303,20 +280,27 @@ public:
         static_assert(is_sync_write_stream<next_layer_type>::value,
                       "SyncWriteStream requirements not met");
 
-        using boost::asio::buffer_size;
-        if(buffer_size(buffers) > 0) {
+        auto size = boost::asio::buffer_size(buffers);
+        if(size > 0) {
             auto iter = find_single(buffers);
             if(iter != buffers.end()) {
                 return next_layer_.write_some(boost::asio::const_buffers_1{*iter}, ec);
             }
             else {
-                if(buffer_size(buffers) <= max_stack_size) {
-                    char buf[max_stack_size];
-                    boost::asio::buffer_copy(boost::asio::buffer(buf), buffers);
-                    return next_layer_.write_some(boost::asio::buffer(buf), ec);
+                if(size <= max_stack_size) {
+                    return next_layer_.write_some(stack_flatten(buffers), ec);
                 } else {
-                    // todo
-                    return next_layer_.write_some(buffers, ec);
+                    try
+                    {
+                        std::unique_ptr<char[]> buf(new char[size]);
+                        auto copy_size = boost::asio::buffer_copy(boost::asio::buffer(buf.get(), size), buffers);
+                        return next_layer_.write_some(boost::asio::const_buffers_1(buf.get(), copy_size), ec);
+                    }
+                    catch(std::bad_alloc const&)
+                    {
+                        ec = http::error::bad_alloc;
+                        return 0;
+                    }
                 }
             }
         }
@@ -354,7 +338,6 @@ public:
     async_write_some(ConstBufferSequence const &buffers,
                      WriteHandler &&handler);
 };
-
 
 template<class Stream>
 template<class MutableBufferSequence, class Handler>
