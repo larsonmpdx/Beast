@@ -5,13 +5,12 @@
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
 
-#ifndef BEAST_EXAMPLE_FLAT_WRITE_STREAM_HPP
-#define BEAST_EXAMPLE_FLAT_WRITE_STREAM_HPP
+#ifndef BEAST_EXAMPLE_COMMON_FLAT_WRITE_STREAM_HPP
+#define BEAST_EXAMPLE_COMMON_FLAT_WRITE_STREAM_HPP
 
 #include <beast/config.hpp>
 #include <beast/core/async_result.hpp>
 #include <beast/core/error.hpp>
-#include <beast/core/multi_buffer.hpp>
 #include <beast/core/type_traits.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/io_service.hpp>
@@ -73,415 +72,436 @@ namespace beast {
     @tparam Stream The type of stream to wrap.
     @tparam DynamicBuffer The type of stream buffer to use.
 */
-    template<class Stream, class DynamicBuffer>
-    class flat_write_stream {
-        static_assert(is_dynamic_buffer<DynamicBuffer>::value,
-                      "DynamicBuffer requirements not met");
+template<class Stream>
+class flat_write_stream {
+    template<class Buffers, class Handler>
+    class write_some_op;
 
-        template<class Buffers, class Handler>
-        class read_some_op;
+    std::size_t capacity_ = 0;
+    Stream next_layer_;
 
-        DynamicBuffer sb_;
-        std::size_t capacity_ = 0;
-        Stream next_layer_;
+    static const std::size_t max_stack_size = 4096;
 
-    public:
-        /// The type of the internal buffer
-        using buffer_type = DynamicBuffer;
+public:
+    /// The type of the next layer.
+    using next_layer_type =
+    typename std::remove_reference<Stream>::type;
 
-        /// The type of the next layer.
-        using next_layer_type =
-        typename std::remove_reference<Stream>::type;
+    /// The type of the lowest layer.
+    using lowest_layer_type =
+    typename get_lowest_layer<next_layer_type>::type;
 
-        /// The type of the lowest layer.
-        using lowest_layer_type =
-        typename get_lowest_layer<next_layer_type>::type;
+    /** Move constructor.
+        @note The behavior of move assignment on or from streams
+        with active or pending operations is undefined.
+    */
+    flat_write_stream(flat_write_stream &&) = default;
 
-        /** Move constructor.
-            @note The behavior of move assignment on or from streams
-            with active or pending operations is undefined.
-        */
-        flat_write_stream(flat_write_stream &&) = default;
+    /** Move assignment.
+        @note The behavior of move assignment on or from streams
+        with active or pending operations is undefined.
+    */
+    flat_write_stream &operator=(flat_write_stream &&) = default;
 
-        /** Move assignment.
-            @note The behavior of move assignment on or from streams
-            with active or pending operations is undefined.
-        */
-        flat_write_stream &operator=(flat_write_stream &&) = default;
+    /** Construct the wrapping stream.
+        @param args Parameters forwarded to the `Stream` constructor.
+    */
+    template<class... Args>
+    explicit
+    flat_write_stream(Args &&... args);
 
-        /** Construct the wrapping stream.
-            @param args Parameters forwarded to the `Stream` constructor.
-        */
-        template<class... Args>
-        explicit
-        flat_write_stream(Args &&... args);
+    /// Get a reference to the next layer.
+    next_layer_type &
+    next_layer() {
+        return next_layer_;
+    }
 
-        /// Get a reference to the next layer.
-        next_layer_type &
-        next_layer() {
-            return next_layer_;
+    /// Get a const reference to the next layer.
+    next_layer_type const &
+    next_layer() const {
+        return next_layer_;
+    }
+
+    /// Get a reference to the lowest layer.
+    lowest_layer_type &
+    lowest_layer() {
+        return next_layer_.lowest_layer();
+    }
+
+    /// Get a const reference to the lowest layer.
+    lowest_layer_type const &
+    lowest_layer() const {
+        return next_layer_.lowest_layer();
+    }
+
+    /// Get the io_service associated with the object.
+    boost::asio::io_service &
+    get_io_service() {
+        return next_layer_.get_io_service();
+    }
+
+    /** Set the maximum buffer size.
+        This changes the maximum size of the internal buffer used
+        to hold read data. No bytes are discarded by this call. If
+        the buffer size is set to zero, no more data will be buffered.
+        Thread safety:
+            The caller is responsible for making sure the call is
+            made from the same implicit or explicit strand.
+        @param size The number of bytes in the read buffer.
+        @note This is a soft limit. If the new maximum size is smaller
+        than the amount of data in the buffer, no bytes are discarded.
+    */
+    void
+    capacity(std::size_t size) {
+        capacity_ = size;
+    }
+
+    template<class ConstBufferSequence>
+    typename std::enable_if<beast::is_const_buffer_sequence<ConstBufferSequence>::value,
+            std::size_t>::type
+            length(ConstBufferSequence const& buffers) {
+        return std::distance(buffers.begin(), buffers.end());
+    }
+
+    /** Return an iterator to the single non zero buffer if it exists.
+        This function returns an iterator to a buffer with a non-zero size if
+        both of the following conditions are met:
+        @li The buffer sequence has a non zero length
+        @li Exactly one buffer in the sequence has a non-zero size
+            Otherwise the function returns `buffers.end()`
+        @param buffers The buffer sequence to search through.
+    */
+    template<class ConstBufferSequence>
+    typename ConstBufferSequence::const_iterator
+    find_single(ConstBufferSequence const& buffers) {
+        std::cout << "find_single working on " << length(buffers) << " buffers" << std::endl;
+        using boost::asio::buffer_size;
+        if(buffer_size(buffers) > 0) {
+            int num_nonzero = 0;
+            auto found_buffer = buffers.end();
+            for(auto it = buffers.begin(); it != buffers.end(); it++) {
+                if(buffer_size(*it) > 0) {
+                    num_nonzero++;
+                    found_buffer = it;
+                }
+            }
+            if(num_nonzero == 1) {
+                std::cout << "found a single nonzero buffer" << std::endl;
+                return found_buffer;
+            } else {
+                std::cout << "found multiple nonzero buffers" << std::endl;
+                return buffers.end();
+            }
+        } else {
+            std::cout << "buffers empty" << std::endl;
+            return buffers.end();
         }
+    }
 
-        /// Get a const reference to the next layer.
-        next_layer_type const &
-        next_layer() const {
-            return next_layer_;
-        }
+    /** Read some data from the stream.
+        This function is used to read data from the stream.
+        The function call will block until one or more bytes of
+        data has been read successfully, or until an error occurs.
+        @param buffers One or more buffers into which the data will be read.
+        @return The number of bytes read.
+        @throws system_error Thrown on failure.
+    */
+    template<class MutableBufferSequence>
+    std::size_t
+    read_some(MutableBufferSequence const &buffers);
 
-        /// Get a reference to the lowest layer.
-        lowest_layer_type &
-        lowest_layer() {
-            return next_layer_.lowest_layer();
-        }
+    /** Read some data from the stream.
+        This function is used to read data from the stream.
+        The function call will block until one or more bytes of
+        data has been read successfully, or until an error occurs.
+        @param buffers One or more buffers into which the data will be read.
+        @param ec Set to the error, if any occurred.
+        @return The number of bytes read, or 0 on error.
+    */
+    template<class MutableBufferSequence>
+    std::size_t
+    read_some(MutableBufferSequence const &buffers,
+              error_code &ec);
 
-        /// Get a const reference to the lowest layer.
-        lowest_layer_type const &
-        lowest_layer() const {
-            return next_layer_.lowest_layer();
-        }
-
-        /// Get the io_service associated with the object.
-        boost::asio::io_service &
-        get_io_service() {
-            return next_layer_.get_io_service();
-        }
-
-        /** Access the internal buffer.
-            The internal buffer is returned. It is possible for the
-            caller to break invariants with this function. For example,
-            by causing the internal buffer size to increase beyond
-            the caller defined maximum.
-        */
-        DynamicBuffer &
-        buffer() {
-            return sb_;
-        }
-
-        /// Access the internal buffer
-        DynamicBuffer const &
-        buffer() const {
-            return sb_;
-        }
-
-        /** Set the maximum buffer size.
-            This changes the maximum size of the internal buffer used
-            to hold read data. No bytes are discarded by this call. If
-            the buffer size is set to zero, no more data will be buffered.
-            Thread safety:
-                The caller is responsible for making sure the call is
-                made from the same implicit or explicit strand.
-            @param size The number of bytes in the read buffer.
-            @note This is a soft limit. If the new maximum size is smaller
-            than the amount of data in the buffer, no bytes are discarded.
-        */
-        void
-        capacity(std::size_t size) {
-            capacity_ = size;
-        }
-
-        /** Read some data from the stream.
-            This function is used to read data from the stream.
-            The function call will block until one or more bytes of
-            data has been read successfully, or until an error occurs.
-            @param buffers One or more buffers into which the data will be read.
-            @return The number of bytes read.
-            @throws system_error Thrown on failure.
-        */
-        template<class MutableBufferSequence>
-        std::size_t
-        read_some(MutableBufferSequence const &buffers);
-
-        /** Read some data from the stream.
-            This function is used to read data from the stream.
-            The function call will block until one or more bytes of
-            data has been read successfully, or until an error occurs.
-            @param buffers One or more buffers into which the data will be read.
-            @param ec Set to the error, if any occurred.
-            @return The number of bytes read, or 0 on error.
-        */
-        template<class MutableBufferSequence>
-        std::size_t
-        read_some(MutableBufferSequence const &buffers,
-                  error_code &ec);
-
-        /** Start an asynchronous read.
-            This function is used to asynchronously read data from
-            the stream. The function call always returns immediately.
-            @param buffers One or more buffers into which the data
-            will be read. Although the buffers object may be copied
-            as necessary, ownership of the underlying memory blocks
-            is retained by the caller, which must guarantee that they
-            remain valid until the handler is called.
-            @param handler The handler to be called when the operation
-            completes. Copies will be made of the handler as required.
-            The equivalent function signature of the handler must be:
-            @code void handler(
-                error_code const& error,      // result of operation
-                std::size_t bytes_transferred // number of bytes transferred
-            ); @endcode
-            Regardless of whether the asynchronous operation completes
-            immediately or not, the handler will not be invoked from within
-            this function. Invocation of the handler will be performed in a
-            manner equivalent to using `boost::asio::io_service::post`.
-        */
-        template<class MutableBufferSequence, class ReadHandler>
+    /** Start an asynchronous read.
+        This function is used to asynchronously read data from
+        the stream. The function call always returns immediately.
+        @param buffers One or more buffers into which the data
+        will be read. Although the buffers object may be copied
+        as necessary, ownership of the underlying memory blocks
+        is retained by the caller, which must guarantee that they
+        remain valid until the handler is called.
+        @param handler The handler to be called when the operation
+        completes. Copies will be made of the handler as required.
+        The equivalent function signature of the handler must be:
+        @code void handler(
+            error_code const& error,      // result of operation
+            std::size_t bytes_transferred // number of bytes transferred
+        ); @endcode
+        Regardless of whether the asynchronous operation completes
+        immediately or not, the handler will not be invoked from within
+        this function. Invocation of the handler will be performed in a
+        manner equivalent to using `boost::asio::io_service::post`.
+    */
+    template<class MutableBufferSequence, class ReadHandler>
 #if BEAST_DOXYGEN
-        void_or_deduced
+    void_or_deduced
 #else
-        async_return_type<ReadHandler, void(error_code)>
+    async_return_type<ReadHandler, void(error_code)>
 #endif
-        async_read_some(MutableBufferSequence const &buffers,
-                        ReadHandler &&handler);
+    async_read_some(MutableBufferSequence const &buffers,
+                    ReadHandler &&handler);
 
-        /** Write some data to the stream.
-            This function is used to write data to the stream.
-            The function call will block until one or more bytes of the
-            data has been written successfully, or until an error occurs.
-            @param buffers One or more data buffers to be written to the stream.
-            @return The number of bytes written.
-            @throws system_error Thrown on failure.
-        */
-        template<class ConstBufferSequence>
-        std::size_t
-        write_some(ConstBufferSequence const &buffers) {
-            static_assert(is_sync_write_stream<next_layer_type>::value,
-                          "SyncWriteStream requirements not met");
+    /** Write some data to the stream.
+        This function is used to write data to the stream.
+        The function call will block until one or more bytes of the
+        data has been written successfully, or until an error occurs.
+        @param buffers One or more data buffers to be written to the stream.
+        @return The number of bytes written.
+        @throws system_error Thrown on failure.
+    */
+    template<class ConstBufferSequence>
+    std::size_t
+    write_some(ConstBufferSequence const &buffers) {
+        static_assert(is_sync_write_stream<next_layer_type>::value,
+                      "SyncWriteStream requirements not met");
+
+        using boost::asio::buffer_size;
+        if(buffer_size(buffers) > 0) {
+            auto iter = find_single(buffers);
+            if(iter != buffers.end()) {
+                return next_layer_.write_some(boost::asio::const_buffers_1{*iter});
+            }
+            else {
+                if(buffer_size(buffers) <= max_stack_size) {
+                    char buf[max_stack_size];
+                    boost::asio::buffer_copy(boost::asio::buffer(buf), buffers);
+                    return next_layer_.write_some(boost::asio::buffer(buf));
+                } else {
+                    // exceeds stack size - todo
+                    return next_layer_.write_some(buffers);
+                }
+            }
+        }
+        else {
             return next_layer_.write_some(buffers);
         }
+    }
 
-        /** Write some data to the stream.
-            This function is used to write data to the stream.
-            The function call will block until one or more bytes of the
-            data has been written successfully, or until an error occurs.
-            @param buffers One or more data buffers to be written to the stream.
-            @param ec Set to the error, if any occurred.
-            @return The number of bytes written.
-        */
-        template<class ConstBufferSequence>
-        std::size_t
-        write_some(ConstBufferSequence const &buffers,
-                   error_code &ec) {
-            static_assert(is_sync_write_stream<next_layer_type>::value,
-                          "SyncWriteStream requirements not met");
+    /** Write some data to the stream.
+        This function is used to write data to the stream.
+        The function call will block until one or more bytes of the
+        data has been written successfully, or until an error occurs.
+        @param buffers One or more data buffers to be written to the stream.
+        @param ec Set to the error, if any occurred.
+        @return The number of bytes written.
+    */
+    template<class ConstBufferSequence>
+    std::size_t
+    write_some(ConstBufferSequence const &buffers,
+               error_code &ec) {
+        static_assert(is_sync_write_stream<next_layer_type>::value,
+                      "SyncWriteStream requirements not met");
+
+        using boost::asio::buffer_size;
+        if(buffer_size(buffers) > 0) {
+            auto iter = find_single(buffers);
+            if(iter != buffers.end()) {
+                return next_layer_.write_some(boost::asio::const_buffers_1{*iter}, ec);
+            }
+            else {
+                if(buffer_size(buffers) <= max_stack_size) {
+                    char buf[max_stack_size];
+                    boost::asio::buffer_copy(boost::asio::buffer(buf), buffers);
+                    return next_layer_.write_some(boost::asio::buffer(buf), ec);
+                } else {
+                    // todo
+                    return next_layer_.write_some(buffers, ec);
+                }
+            }
+        }
+        else {
             return next_layer_.write_some(buffers, ec);
         }
-
-        /** Start an asynchronous write.
-            This function is used to asynchronously write data from
-            the stream. The function call always returns immediately.
-            @param buffers One or more data buffers to be written to
-            the stream. Although the buffers object may be copied as
-            necessary, ownership of the underlying memory blocks is
-            retained by the caller, which must guarantee that they
-            remain valid until the handler is called.
-            @param handler The handler to be called when the operation
-            completes. Copies will be made of the handler as required.
-            The equivalent function signature of the handler must be:
-            @code void handler(
-                error_code const& error,      // result of operation
-                std::size_t bytes_transferred // number of bytes transferred
-            ); @endcode
-            Regardless of whether the asynchronous operation completes
-            immediately or not, the handler will not be invoked from within
-            this function. Invocation of the handler will be performed in a
-            manner equivalent to using `boost::asio::io_service::post`.
-        */
-        template<class ConstBufferSequence, class WriteHandler>
-#if BEAST_DOXYGEN
-        void_or_deduced
-#else
-        async_return_type<WriteHandler, void(error_code)>
-#endif
-        async_write_some(ConstBufferSequence const &buffers,
-                         WriteHandler &&handler);
-    };
-
-
-    template<class Stream, class DynamicBuffer>
-    template<class MutableBufferSequence, class Handler>
-    class flat_write_stream<
-            Stream, DynamicBuffer>::read_some_op
-    {
-        int step_ = 0;
-        flat_write_stream& s_;
-        MutableBufferSequence b_;
-        Handler h_;
-
-    public:
-        read_some_op(read_some_op&&) = default;
-        read_some_op(read_some_op const&) = default;
-
-        template<class DeducedHandler, class... Args>
-        read_some_op(DeducedHandler&& h,
-                     flat_write_stream& s,
-                     MutableBufferSequence const& b)
-                : s_(s)
-                , b_(b)
-                , h_(std::forward<DeducedHandler>(h))
-        {
-        }
-
-        void
-        operator()(error_code const& ec,
-                   std::size_t bytes_transferred);
-
-        friend
-        void* asio_handler_allocate(
-                std::size_t size, read_some_op* op)
-        {
-            using boost::asio::asio_handler_allocate;
-            return asio_handler_allocate(
-                    size, std::addressof(op->h_));
-        }
-
-        friend
-        void asio_handler_deallocate(
-                void* p, std::size_t size, read_some_op* op)
-        {
-            using boost::asio::asio_handler_deallocate;
-            asio_handler_deallocate(
-                    p, size, std::addressof(op->h_));
-        }
-
-        friend
-        bool asio_handler_is_continuation(read_some_op* op)
-        {
-            using boost::asio::asio_handler_is_continuation;
-            return asio_handler_is_continuation(
-                    std::addressof(op->h_));
-        }
-
-        template<class Function>
-        friend
-        void asio_handler_invoke(Function&& f, read_some_op* op)
-        {
-            using boost::asio::asio_handler_invoke;
-            asio_handler_invoke(f, std::addressof(op->h_));
-        }
-    };
-
-    template<class Stream, class DynamicBuffer>
-    template<class MutableBufferSequence, class Handler>
-    void
-    flat_write_stream<Stream, DynamicBuffer>::
-    read_some_op<MutableBufferSequence, Handler>::operator()(
-            error_code const& ec, std::size_t bytes_transferred)
-    {
-        switch(step_)
-        {
-            case 0:
-                if(s_.sb_.size() == 0)
-                {
-                    if(s_.capacity_ == 0)
-                    {
-                        // read (unbuffered)
-                        step_ = 1;
-                        return s_.next_layer_.async_read_some(
-                                b_, std::move(*this));
-                    }
-
-                    // read
-                    step_ = 2;
-                    return s_.next_layer_.async_read_some(
-                            s_.sb_.prepare(s_.capacity_),
-                            std::move(*this));
-
-                }
-                step_ = 3;
-                s_.get_io_service().post(
-                        bind_handler(std::move(*this), ec, 0));
-                return;
-
-            case 1:
-                // upcall
-                break;
-
-            case 2:
-                s_.sb_.commit(bytes_transferred);
-                BEAST_FALLTHROUGH;
-
-            case 3:
-                bytes_transferred =
-                        boost::asio::buffer_copy(b_, s_.sb_.data());
-                s_.sb_.consume(bytes_transferred);
-                break;
-        }
-        h_(ec, bytes_transferred);
     }
+
+    /** Start an asynchronous write.
+        This function is used to asynchronously write data from
+        the stream. The function call always returns immediately.
+        @param buffers One or more data buffers to be written to
+        the stream. Although the buffers object may be copied as
+        necessary, ownership of the underlying memory blocks is
+        retained by the caller, which must guarantee that they
+        remain valid until the handler is called.
+        @param handler The handler to be called when the operation
+        completes. Copies will be made of the handler as required.
+        The equivalent function signature of the handler must be:
+        @code void handler(
+            error_code const& error,      // result of operation
+            std::size_t bytes_transferred // number of bytes transferred
+        ); @endcode
+        Regardless of whether the asynchronous operation completes
+        immediately or not, the handler will not be invoked from within
+        this function. Invocation of the handler will be performed in a
+        manner equivalent to using `boost::asio::io_service::post`.
+    */
+    template<class ConstBufferSequence, class WriteHandler>
+#if BEAST_DOXYGEN
+    void_or_deduced
+#else
+    async_return_type<WriteHandler, void(error_code)>
+#endif
+    async_write_some(ConstBufferSequence const &buffers,
+                     WriteHandler &&handler);
+};
+
+
+template<class Stream>
+template<class MutableBufferSequence, class Handler>
+class flat_write_stream<
+        Stream>::write_some_op
+{
+    int step_ = 0;
+    flat_write_stream& s_;
+    MutableBufferSequence b_;
+    Handler h_;
+
+public:
+    write_some_op(write_some_op&&) = default;
+    write_some_op(write_some_op const&) = default;
+
+    template<class DeducedHandler, class... Args>
+    write_some_op(DeducedHandler&& h,
+                 flat_write_stream& s,
+                 MutableBufferSequence const& b)
+            : s_(s)
+            , b_(b)
+            , h_(std::forward<DeducedHandler>(h))
+    {
+    }
+
+    void
+    operator()(error_code const& ec,
+               std::size_t bytes_transferred);
+
+    friend
+    void* asio_handler_allocate(
+            std::size_t size, write_some_op* op)
+    {
+        using boost::asio::asio_handler_allocate;
+        return asio_handler_allocate(
+                size, std::addressof(op->h_));
+    }
+
+    friend
+    void asio_handler_deallocate(
+            void* p, std::size_t size, write_some_op* op)
+    {
+        using boost::asio::asio_handler_deallocate;
+        asio_handler_deallocate(
+                p, size, std::addressof(op->h_));
+    }
+
+    friend
+    bool asio_handler_is_continuation(write_some_op* op)
+    {
+        using boost::asio::asio_handler_is_continuation;
+        return asio_handler_is_continuation(
+                std::addressof(op->h_));
+    }
+
+    template<class Function>
+    friend
+    void asio_handler_invoke(Function&& f, write_some_op* op)
+    {
+        using boost::asio::asio_handler_invoke;
+        asio_handler_invoke(f, std::addressof(op->h_));
+    }
+};
+
+template<class Stream>
+template<class MutableBufferSequence, class Handler>
+void
+flat_write_stream<Stream>::
+write_some_op<MutableBufferSequence, Handler>::operator()(
+        error_code const& ec, std::size_t bytes_transferred)
+{
+
+}
 
 //------------------------------------------------------------------------------
 
-    template<class Stream, class DynamicBuffer>
-    template<class... Args>
-    flat_write_stream<Stream, DynamicBuffer>::
-    flat_write_stream(Args&&... args)
-            : next_layer_(std::forward<Args>(args)...)
-    {
-    }
+template<class Stream>
+template<class... Args>
+flat_write_stream<Stream>::
+flat_write_stream(Args&&... args)
+        : next_layer_(std::forward<Args>(args)...)
+{
+}
 
-    template<class Stream, class DynamicBuffer>
-    template<class ConstBufferSequence, class WriteHandler>
-    auto
-    flat_write_stream<Stream, DynamicBuffer>::
-    async_write_some(ConstBufferSequence const& buffers,
-                     WriteHandler&& handler) ->
-    async_return_type<WriteHandler, void(error_code)>
-    {
-        static_assert(is_async_write_stream<next_layer_type>::value,
-                      "AsyncWriteStream requirements not met");
-        static_assert(is_const_buffer_sequence<
-                              ConstBufferSequence>::value,
-                      "ConstBufferSequence requirements not met");
-        static_assert(is_completion_handler<WriteHandler,
-                              void(error_code, std::size_t)>::value,
-                      "WriteHandler requirements not met");
-        return next_layer_.async_write_some(buffers,
-                                            std::forward<WriteHandler>(handler));
-    }
+template<class Stream>
+template<class ConstBufferSequence, class WriteHandler>
+auto
+flat_write_stream<Stream>::
+async_write_some(ConstBufferSequence const& buffers,
+                 WriteHandler&& handler) ->
+async_return_type<WriteHandler, void(error_code)>
+{
+    static_assert(is_async_write_stream<next_layer_type>::value,
+                  "AsyncWriteStream requirements not met");
+    static_assert(is_const_buffer_sequence<
+                          ConstBufferSequence>::value,
+                  "ConstBufferSequence requirements not met");
+    static_assert(is_completion_handler<WriteHandler,
+                          void(error_code, std::size_t)>::value,
+                  "WriteHandler requirements not met");
+    return next_layer_.async_write_some(buffers,
+                                        std::forward<WriteHandler>(handler));
+}
 
-    template<class Stream, class DynamicBuffer>
-    template<class MutableBufferSequence>
-    std::size_t
-    flat_write_stream<Stream, DynamicBuffer>::
-    read_some(
-            MutableBufferSequence const& buffers)
-    {
-        static_assert(is_sync_read_stream<next_layer_type>::value,
-                      "SyncReadStream requirements not met");
-        return next_layer_.read_some(buffers);
-    }
+template<class Stream>
+template<class MutableBufferSequence>
+std::size_t
+flat_write_stream<Stream>::
+read_some(
+        MutableBufferSequence const& buffers)
+{
+    static_assert(is_sync_read_stream<next_layer_type>::value,
+                  "SyncReadStream requirements not met");
+    return next_layer_.read_some(buffers);
+}
 
-    template<class Stream, class DynamicBuffer>
-    template<class MutableBufferSequence>
-    std::size_t
-    flat_write_stream<Stream, DynamicBuffer>::
-    read_some(MutableBufferSequence const& buffers,
-              error_code& ec)
-    {
-        static_assert(is_sync_read_stream<next_layer_type>::value,
-                      "SyncReadStream requirements not met");
-        return next_layer_.read_some(buffers, ec);
-    }
+template<class Stream>
+template<class MutableBufferSequence>
+std::size_t
+flat_write_stream<Stream>::
+read_some(MutableBufferSequence const& buffers,
+          error_code& ec)
+{
+    static_assert(is_sync_read_stream<next_layer_type>::value,
+                  "SyncReadStream requirements not met");
+    return next_layer_.read_some(buffers, ec);
+}
 
-    template<class Stream, class DynamicBuffer>
-    template<class MutableBufferSequence, class ReadHandler>
-    auto
-    flat_write_stream<Stream, DynamicBuffer>::
-    async_read_some(MutableBufferSequence const& buffers,
-                    ReadHandler&& handler) ->
-    async_return_type<ReadHandler, void(error_code)>
-    {
-        static_assert(is_async_read_stream<next_layer_type>::value,
-                      "Stream requirements not met");
-        static_assert(is_mutable_buffer_sequence<
-                              MutableBufferSequence>::value,
-                      "MutableBufferSequence requirements not met");
-        static_assert(is_completion_handler<ReadHandler,
-                              void(error_code, std::size_t)>::value,
-                      "ReadHandler requirements not met");
-        return next_layer_.async_read_some(buffers,
-                                            std::forward<ReadHandler>(handler));
-    }
+template<class Stream>
+template<class MutableBufferSequence, class ReadHandler>
+auto
+flat_write_stream<Stream>::
+async_read_some(MutableBufferSequence const& buffers,
+                ReadHandler&& handler) ->
+async_return_type<ReadHandler, void(error_code)>
+{
+    static_assert(is_async_read_stream<next_layer_type>::value,
+                  "Stream requirements not met");
+    static_assert(is_mutable_buffer_sequence<
+                          MutableBufferSequence>::value,
+                  "MutableBufferSequence requirements not met");
+    static_assert(is_completion_handler<ReadHandler,
+                          void(error_code, std::size_t)>::value,
+                  "ReadHandler requirements not met");
+    return next_layer_.async_read_some(buffers,
+                                        std::forward<ReadHandler>(handler));
+}
 }
 
 #endif

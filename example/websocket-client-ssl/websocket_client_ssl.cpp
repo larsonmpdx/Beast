@@ -54,7 +54,7 @@ int main(int argc, char** argv)
 
     // Wrap the now-connected socket in an SSL stream
     //using stream_type = ssl::stream<tcp::socket&>;
-    using stream_type = boost::asio::ssl::stream<beast::flat_write_stream<boost::asio::ip::tcp::socket&, beast::multi_buffer>>;
+    using stream_type = boost::asio::ssl::stream<beast::flat_write_stream<boost::asio::ip::tcp::socket&>>;
 
     ssl::context ctx{ssl::context::sslv23};
     stream_type stream{sock, ctx};
