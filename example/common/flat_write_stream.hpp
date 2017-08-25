@@ -163,7 +163,10 @@ namespace beast {
             */
             template<class... Args>
             explicit
-            flat_write_stream(Args &&... args);
+            flat_write_stream(Args &&... args)
+                    : next_layer_(std::forward<Args>(args)...)
+            {
+            }
 
             /// Get a reference to the next layer.
             next_layer_type &
@@ -205,7 +208,12 @@ namespace beast {
             */
             template<class MutableBufferSequence>
             std::size_t
-            read_some(MutableBufferSequence const &buffers);
+            read_some(MutableBufferSequence const &buffers)
+            {
+                static_assert(is_sync_read_stream<next_layer_type>::value,
+                              "SyncReadStream requirements not met");
+                return next_layer_.read_some(buffers);
+            }
 
             /** Read some data from the stream.
                 This function is used to read data from the stream.
@@ -218,7 +226,12 @@ namespace beast {
             template<class MutableBufferSequence>
             std::size_t
             read_some(MutableBufferSequence const &buffers,
-                      error_code &ec);
+                      error_code &ec)
+            {
+                static_assert(is_sync_read_stream<next_layer_type>::value,
+                              "SyncReadStream requirements not met");
+                return next_layer_.read_some(buffers, ec);
+            }
 
             /** Start an asynchronous read.
                 This function is used to asynchronously read data from
@@ -247,7 +260,19 @@ namespace beast {
             async_return_type<ReadHandler, void(error_code)>
 #endif
             async_read_some(MutableBufferSequence const &buffers,
-                            ReadHandler &&handler);
+                            ReadHandler &&handler)
+            {
+                static_assert(is_async_read_stream<next_layer_type>::value,
+                              "Stream requirements not met");
+                static_assert(is_mutable_buffer_sequence<
+                                      MutableBufferSequence>::value,
+                              "MutableBufferSequence requirements not met");
+                static_assert(is_completion_handler<ReadHandler,
+                                      void(error_code, std::size_t)>::value,
+                              "ReadHandler requirements not met");
+                return next_layer_.async_read_some(buffers,
+                                                   std::forward<ReadHandler>(handler));
+            }
 
             /** Write some data to the stream.
                 This function is used to write data to the stream.
@@ -286,6 +311,9 @@ namespace beast {
                               "SyncWriteStream requirements not met");
 
                 auto size = boost::asio::buffer_size(buffers);
+
+                std::cout << "write_some buffer size: " << size << std::endl;   //todo: remove
+
                 if(size > 0) {
                     auto iter = find_single(buffers);
                     if(iter != buffers.end()) {
@@ -341,7 +369,52 @@ namespace beast {
             async_return_type<WriteHandler, void(error_code)>
 #endif
             async_write_some(ConstBufferSequence const &buffers,
-                             WriteHandler &&handler);
+                             WriteHandler &&handler)
+            {
+                static_assert(is_async_write_stream<next_layer_type>::value,
+                              "AsyncWriteStream requirements not met");
+                static_assert(is_const_buffer_sequence<
+                                      ConstBufferSequence>::value,
+                              "ConstBufferSequence requirements not met");
+                static_assert(is_completion_handler<WriteHandler,
+                                      void(error_code, std::size_t)>::value,
+                              "WriteHandler requirements not met");
+
+                auto size = boost::asio::buffer_size(buffers);
+
+                std::cout << "async_write_some buffer size:: " << size << std::endl;   //todo: remove
+
+
+                if(size > 0) {
+                    auto iter = find_single(buffers);
+                    if(iter != buffers.end()) {
+                        return next_layer_.async_write_some(boost::asio::const_buffers_1{*iter},
+                                                     std::forward<WriteHandler>(handler));
+                    }
+                    else {
+                        if(size <= max_stack_size) {
+                            return next_layer_.async_write_some(stack_flatten(buffers),
+                                                         std::forward<WriteHandler>(handler));
+                        } else {
+                            try
+                            {
+                                std::unique_ptr<char[]> buf(new char[size]);
+                                auto copy_size = boost::asio::buffer_copy(boost::asio::buffer(buf.get(), size), buffers);
+                                return next_layer_.async_write_some(boost::asio::const_buffers_1(buf.get(), copy_size),
+                                                             std::forward<WriteHandler>(handler));
+                            }
+                            catch(std::bad_alloc const&)
+                            {
+                                return; // todo: handle error?
+                            }
+                        }
+                    }
+                }
+                else {
+                    return next_layer_.async_write_some(buffers,
+                                                        std::forward<WriteHandler>(handler));
+                }
+            }
 
             friend
             void
@@ -357,6 +430,8 @@ namespace beast {
             async_teardown(websocket::role_type,
                            flat_write_stream& s, TeardownHandler&& handler)
             {
+                std::cout << "async_teardown" << std::endl;   //todo: remove
+
                 s.get_io_service().post(
                         bind_handler(std::move(handler),
                                      error_code{}));
@@ -395,6 +470,9 @@ namespace beast {
             void* asio_handler_allocate(
                     std::size_t size, write_some_op* op)
             {
+
+                std::cout << "allocate" << std::endl;   //todo: remove
+
                 using boost::asio::asio_handler_allocate;
                 return asio_handler_allocate(
                         size, std::addressof(op->h_));
@@ -433,82 +511,7 @@ namespace beast {
         write_some_op<MutableBufferSequence, Handler>::operator()(
                 error_code const& ec, std::size_t bytes_transferred)
         {
-
-        }
-
-//------------------------------------------------------------------------------
-
-        template<class Stream>
-        template<class... Args>
-        flat_write_stream<Stream>::
-        flat_write_stream(Args&&... args)
-                : next_layer_(std::forward<Args>(args)...)
-        {
-        }
-
-        template<class Stream>
-        template<class ConstBufferSequence, class WriteHandler>
-        auto
-        flat_write_stream<Stream>::
-        async_write_some(ConstBufferSequence const& buffers,
-                         WriteHandler&& handler) ->
-        async_return_type<WriteHandler, void(error_code)>
-        {
-            static_assert(is_async_write_stream<next_layer_type>::value,
-                          "AsyncWriteStream requirements not met");
-            static_assert(is_const_buffer_sequence<
-                                  ConstBufferSequence>::value,
-                          "ConstBufferSequence requirements not met");
-            static_assert(is_completion_handler<WriteHandler,
-                                  void(error_code, std::size_t)>::value,
-                          "WriteHandler requirements not met");
-
-            return next_layer_.async_write_some(buffers,
-                                                std::forward<WriteHandler>(handler));
-        }
-
-        template<class Stream>
-        template<class MutableBufferSequence>
-        std::size_t
-        flat_write_stream<Stream>::
-        read_some(
-                MutableBufferSequence const& buffers)
-        {
-            static_assert(is_sync_read_stream<next_layer_type>::value,
-                          "SyncReadStream requirements not met");
-            return next_layer_.read_some(buffers);
-        }
-
-        template<class Stream>
-        template<class MutableBufferSequence>
-        std::size_t
-        flat_write_stream<Stream>::
-        read_some(MutableBufferSequence const& buffers,
-                  error_code& ec)
-        {
-            static_assert(is_sync_read_stream<next_layer_type>::value,
-                          "SyncReadStream requirements not met");
-            return next_layer_.read_some(buffers, ec);
-        }
-
-        template<class Stream>
-        template<class MutableBufferSequence, class ReadHandler>
-        auto
-        flat_write_stream<Stream>::
-        async_read_some(MutableBufferSequence const& buffers,
-                        ReadHandler&& handler) ->
-        async_return_type<ReadHandler, void(error_code)>
-        {
-            static_assert(is_async_read_stream<next_layer_type>::value,
-                          "Stream requirements not met");
-            static_assert(is_mutable_buffer_sequence<
-                                  MutableBufferSequence>::value,
-                          "MutableBufferSequence requirements not met");
-            static_assert(is_completion_handler<ReadHandler,
-                                  void(error_code, std::size_t)>::value,
-                          "ReadHandler requirements not met");
-            return next_layer_.async_read_some(buffers,
-                                               std::forward<ReadHandler>(handler));
+            std::cout << "write_some_op" << std::endl;   //todo: remove
         }
 
     }
