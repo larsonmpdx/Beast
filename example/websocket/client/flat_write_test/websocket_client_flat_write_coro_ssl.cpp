@@ -87,11 +87,17 @@ do_session(
 
 
 
-
+    std::cout << "1" << std::endl;
     // Perform the websocket handshake
     ws.async_handshake(host, "/", yield[ec]);
     if(ec)
+    {
+        std::cout << "1a" << std::endl;
         return fail(ec, "handshake");
+    }
+
+
+    std::cout << "2" << std::endl;
 
     // Send the message
     ws.async_write(boost::asio::buffer(std::string(text)), yield[ec]);
@@ -114,7 +120,7 @@ do_session(
     // If we get here then the connection is closed gracefully
 
     // The buffers() function helps print a ConstBufferSequence
-    std::cout << boost::beast::buffers(b.data()) << std::endl;
+    std::cout << "received: " << boost::beast::buffers(b.data()) << std::endl;
 }
 
 //------------------------------------------------------------------------------
