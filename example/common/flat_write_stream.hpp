@@ -388,26 +388,56 @@ namespace beast {
                 std::shared_ptr<char> buf;
 
 
+
+                boost::beast::async_completion<WriteHandler,
+                        void(boost::beast::error_code, size_t)>
+                        init{handler};
+
+
+
+
                 if(size > 0) {
                     auto iter = find_single(buffers);
                     if(iter != buffers.end()) {
                         boost::asio::const_buffers_1 cb1 = boost::asio::const_buffers_1{*iter};
-                        write_some_op<ConstBufferSequence, WriteHandler> op(handler, *this, buffers, cb1, buf);
-                        return next_layer_.async_write_some(cb1, op);
+
+
+
+
+
+                        write_some_op<
+                                ConstBufferSequence,
+                                boost::beast::handler_type<
+                                        WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, buffers, cb1, buf);
+
+
+
+                        op(boost::beast::error_code{}, 0);
+                        return init.result.get();
                     }
                     else {
                         if(size <= max_stack_size) {
                             boost::asio::const_buffers_1 cb1 = stack_flatten(buffers);
-                            write_some_op<ConstBufferSequence, WriteHandler> op(handler, *this, buffers, cb1, buf);
-                            return next_layer_.async_write_some(cb1, op);
+                            write_some_op<
+                                    ConstBufferSequence,
+                                    boost::beast::handler_type<
+                                            WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, buffers, cb1, buf);
+                            op(boost::beast::error_code{}, 0);
+                            return init.result.get();
                         } else {
                             try
                             {
                                 buf = std::make_shared<char>(size);
                                 auto copy_size = boost::asio::buffer_copy(boost::asio::buffer(buf.get(), size), buffers);
                                 boost::asio::const_buffers_1 cb1 = boost::asio::const_buffers_1(buf.get(), copy_size);
-                                write_some_op<ConstBufferSequence, WriteHandler> op(handler, *this, buffers, cb1, buf);
-                                return next_layer_.async_write_some(cb1, op);
+                                write_some_op<
+                                        ConstBufferSequence,
+                                        boost::beast::handler_type<
+                                                WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, buffers, cb1, buf);
+
+
+                                op(boost::beast::error_code{}, 0);
+                                return init.result.get();
                             }
                             catch(std::bad_alloc const&)
                             {
@@ -423,22 +453,16 @@ namespace beast {
 
 
 
+
+
        //         return next_layer_.async_write_some(buffers, op);     // todo: std::forward? or something to fix lifetime?
 
 /*
-                boost::beast::async_completion<WriteHandler,
-                        void(boost::beast::error_code, size_t)>
-                        init{handler};
 
-                write_some_op<
-                ConstBufferSequence,
-                boost::beast::handler_type<
-                        WriteHandler, void(boost::beast::error_code, std::size_t)>>
-                        operation{std::move(init.completion_handler), *this, buffers};
 
-                operation(boost::beast::error_code{}, 0);
 
-                return init.result.get();
+
+
 */
 
             }
@@ -478,6 +502,8 @@ namespace beast {
             boost::asio::const_buffers_1& cb1_;
             std::shared_ptr<char> ptr_;
 
+            int step = 0;
+
         public:
             write_some_op(write_some_op&&) = default;
             write_some_op(write_some_op const&) = default;
@@ -513,7 +539,17 @@ namespace beast {
 
                 std::cout << "write_some_op -  buffer size: " << size << std::endl;   //todo: remove
 
-                return boost::asio::async_write(s_.next_layer(), cb1_, std::move(*this));
+
+                switch(ec ? 1 : step)
+                {
+                    case 0:
+                        step = 1;
+                        return boost::asio::async_write(s_.next_layer(), cb1_, std::move(*this));
+                    default:
+                        break;
+                }
+
+                h_(ec, bytes_transferred);
             }
 
             friend
