@@ -380,60 +380,48 @@ namespace beast {
                                       void(error_code, std::size_t)>::value,
                               "WriteHandler requirements not met");
 
-
                 auto size = boost::asio::buffer_size(buffers);
 
                 std::cout << "write_some buffer size: " << size << std::endl;   //todo: remove
-
-                std::shared_ptr<char> buf;
-
-
 
                 boost::beast::async_completion<WriteHandler,
                         void(boost::beast::error_code, size_t)>
                         init{handler};
 
-
                 if(size > 0) {
                     auto iter = find_single(buffers);
                     if(iter != buffers.end()) {
-                        boost::asio::const_buffers_1 cb1 = boost::asio::const_buffers_1{*iter};
-
-
                         write_some_op<
                                 ConstBufferSequence,
                                 boost::beast::handler_type<
-                                        WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, cb1, buf);
-
+                                        WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, boost::asio::const_buffers_1{*iter}, std::shared_ptr<char>(nullptr));
 
                         op(boost::beast::error_code{}, 0);
                         return init.result.get();
                     }
                     else {
                         if(size <= max_stack_size) {
-                            boost::asio::const_buffers_1 cb1 = stack_flatten(buffers);
                             write_some_op<
                                     ConstBufferSequence,
                                     boost::beast::handler_type<
-                                            WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, cb1, buf);
+                                            WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, stack_flatten(buffers), std::shared_ptr<char>(nullptr));
+
                             op(boost::beast::error_code{}, 0);
                             return init.result.get();
                         } else {
-                            try
-                            {
-                                buf = std::make_shared<char>(size);
-                                auto copy_size = boost::asio::buffer_copy(boost::asio::buffer(buf.get(), size), buffers);
-                                boost::asio::const_buffers_1 cb1 = boost::asio::const_buffers_1(buf.get(), copy_size);
+                            try {
+                                auto buf = std::shared_ptr<char>(new char[size], std::default_delete<char[]>());
+                                auto copy_size = boost::asio::buffer_copy(boost::asio::buffer(buf.get(), size),
+                                                                          buffers);
                                 write_some_op<
                                         ConstBufferSequence,
                                         boost::beast::handler_type<
-                                                WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, cb1, buf);
+                                                WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, boost::asio::const_buffers_1(buf.get(), copy_size), buf);
 
                                 op(boost::beast::error_code{}, 0);
                                 return init.result.get();
                             }
-                            catch(std::bad_alloc const&)
-                            {
+                            catch (std::bad_alloc const &) {
                                 // todo
                                 return;
                             }
@@ -443,21 +431,6 @@ namespace beast {
                 else {
                     return next_layer_.async_write_some(buffers, handler);
                 }
-
-
-
-
-
-       //         return next_layer_.async_write_some(buffers, op);     // todo: std::forward? or something to fix lifetime?
-
-/*
-
-
-
-
-
-*/
-
             }
 
             friend
@@ -491,7 +464,7 @@ namespace beast {
         {
             Handler h_;
             flat_write_stream& s_;
-            boost::asio::const_buffers_1& cb1_;
+            boost::asio::const_buffers_1 cb1_;
             std::shared_ptr<char> ptr_;
 
             int step = 0;
@@ -503,12 +476,12 @@ namespace beast {
             template<class DeducedHandler, class... Args>
             write_some_op(DeducedHandler&& h,
                           flat_write_stream& s,
-                          boost::asio::const_buffers_1& cb1,
-                          std::shared_ptr<char>& ptr)
+                          boost::asio::const_buffers_1 cb1,
+                          std::shared_ptr<char> ptr)
                     : h_(std::forward<DeducedHandler>(h))
                     , s_(s)
-                    , cb1_(cb1)
-                    , ptr_(ptr)
+                    , cb1_(std::move(cb1))
+                    , ptr_(std::move(ptr))
             {}
 
             void
