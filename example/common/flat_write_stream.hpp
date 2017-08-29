@@ -394,22 +394,16 @@ namespace beast {
                         init{handler};
 
 
-
-
                 if(size > 0) {
                     auto iter = find_single(buffers);
                     if(iter != buffers.end()) {
                         boost::asio::const_buffers_1 cb1 = boost::asio::const_buffers_1{*iter};
 
 
-
-
-
                         write_some_op<
                                 ConstBufferSequence,
                                 boost::beast::handler_type<
-                                        WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, buffers, cb1, buf);
-
+                                        WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, cb1, buf);
 
 
                         op(boost::beast::error_code{}, 0);
@@ -421,7 +415,7 @@ namespace beast {
                             write_some_op<
                                     ConstBufferSequence,
                                     boost::beast::handler_type<
-                                            WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, buffers, cb1, buf);
+                                            WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, cb1, buf);
                             op(boost::beast::error_code{}, 0);
                             return init.result.get();
                         } else {
@@ -433,8 +427,7 @@ namespace beast {
                                 write_some_op<
                                         ConstBufferSequence,
                                         boost::beast::handler_type<
-                                                WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, buffers, cb1, buf);
-
+                                                WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, cb1, buf);
 
                                 op(boost::beast::error_code{}, 0);
                                 return init.result.get();
@@ -498,7 +491,6 @@ namespace beast {
         {
             Handler h_;
             flat_write_stream& s_;
-            ConstBufferSequence b_;
             boost::asio::const_buffers_1& cb1_;
             std::shared_ptr<char> ptr_;
 
@@ -511,34 +503,20 @@ namespace beast {
             template<class DeducedHandler, class... Args>
             write_some_op(DeducedHandler&& h,
                           flat_write_stream& s,
-                          ConstBufferSequence const& b,
                           boost::asio::const_buffers_1& cb1,
                           std::shared_ptr<char>& ptr)
                     : h_(std::forward<DeducedHandler>(h))
                     , s_(s)
-                    , b_(b)
                     , cb1_(cb1)
                     , ptr_(ptr)
-            {
-                std::cout << "ctor" << std::endl;
-            }
-
-            // todo: remove
-            ~write_some_op()
-            {
-                std::cout << "dtor" << std::endl;
-            }
+            {}
 
             void
             operator()(error_code const& ec,
                        std::size_t bytes_transferred)
             {
-                std::cout << "write_some_op - bytes transferred: " << bytes_transferred << std::endl;   //todo: remove
-
                 auto size = boost::asio::buffer_size(cb1_);
-
-                std::cout << "write_some_op -  buffer size: " << size << std::endl;   //todo: remove
-
+                std::cout << "write_some_op - bytes transferred: " << bytes_transferred << " buffer size: " << size << std::endl;   //todo: remove
 
                 switch(ec ? 1 : step)
                 {
