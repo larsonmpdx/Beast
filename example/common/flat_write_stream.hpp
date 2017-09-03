@@ -381,51 +381,21 @@ namespace beast {
                               "WriteHandler requirements not met");
 
                 auto size = boost::asio::buffer_size(buffers);
-
                 std::cout << "write_some buffer size: " << size << std::endl;   //todo: remove
 
-                boost::beast::async_completion<WriteHandler,
-                        void(boost::beast::error_code, size_t)>
-                        init{handler};
-
                 if(size > 0) {
-                    auto iter = find_single(buffers);
-                    if(iter != buffers.end()) {
+                    try {
                         write_some_op<
                                 ConstBufferSequence,
                                 boost::beast::handler_type<
-                                        WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, boost::asio::const_buffers_1{*iter}, std::shared_ptr<char>(nullptr));
+                                        WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, buffers);
 
                         op(boost::beast::error_code{}, 0);
-                        return init.result.get();
+                        return;
                     }
-                    else {
-                        if(size <= max_stack_size) {
-                            write_some_op<
-                                    ConstBufferSequence,
-                                    boost::beast::handler_type<
-                                            WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, stack_flatten(buffers), std::shared_ptr<char>(nullptr));
-
-                            op(boost::beast::error_code{}, 0);
-                            return init.result.get();
-                        } else {
-                            try {
-                                auto buf = std::shared_ptr<char>(new char[size], std::default_delete<char[]>());
-                                auto copy_size = boost::asio::buffer_copy(boost::asio::buffer(buf.get(), size),
-                                                                          buffers);
-                                write_some_op<
-                                        ConstBufferSequence,
-                                        boost::beast::handler_type<
-                                                WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, boost::asio::const_buffers_1(buf.get(), copy_size), buf);
-
-                                op(boost::beast::error_code{}, 0);
-                                return init.result.get();
-                            }
-                            catch (std::bad_alloc const &) {
-                                // todo
-                                return;
-                            }
-                        }
+                    catch (std::bad_alloc const &) {
+                        // todo
+                        return;
                     }
                 }
                 else {
@@ -435,23 +405,23 @@ namespace beast {
 
             friend
             void
-            teardown(websocket::role_type,
-                     flat_write_stream&, boost::system::error_code& ec)
+            teardown(websocket::role_type role,
+                     flat_write_stream& stream,
+                     boost::system::error_code& ec)
             {
-                ec.assign(0, ec.category());
+                using boost::beast::websocket::teardown;
+                teardown(role, stream.next_layer(), ec);
             }
 
             template<class TeardownHandler>
             friend
             void
-            async_teardown(websocket::role_type,
-                           flat_write_stream& s, TeardownHandler&& handler)
+            async_teardown(websocket::role_type role,
+                           flat_write_stream& stream,
+                           TeardownHandler&& handler)
             {
-                std::cout << "async_teardown" << std::endl;   //todo: remove
-
-                s.get_io_service().post(
-                        bind_handler(std::move(handler),
-                                     error_code{}));
+                using boost::beast::websocket::async_teardown;
+                async_teardown(role, stream.next_layer(), std::forward<TeardownHandler>(handler));
             }
         };
 
@@ -464,38 +434,56 @@ namespace beast {
         {
             Handler h_;
             flat_write_stream& s_;
-            boost::asio::const_buffers_1 cb1_;
-            std::shared_ptr<char> ptr_;
+            ConstBufferSequence const& b_;
 
+            std::shared_ptr<char> ptr_;
+            std::size_t copy_size;
+            typename ConstBufferSequence::const_iterator iter;
+            bool single_buffer;
             int step = 0;
 
         public:
             write_some_op(write_some_op&&) = default;
             write_some_op(write_some_op const&) = default;
 
-            template<class DeducedHandler, class... Args>
+            template<class DeducedHandler>
             write_some_op(DeducedHandler&& h,
                           flat_write_stream& s,
-                          boost::asio::const_buffers_1 cb1,
-                          std::shared_ptr<char> ptr)
+                          ConstBufferSequence const& buffers)
                     : h_(std::forward<DeducedHandler>(h))
                     , s_(s)
-                    , cb1_(std::move(cb1))
-                    , ptr_(std::move(ptr))
-            {}
+                    , b_(buffers)
+            {
+                auto size = boost::asio::buffer_size(buffers);
+                iter = find_single(buffers);
+                if(iter != buffers.end()) {
+                    single_buffer = true;
+
+                } else{
+                    single_buffer = false;
+                    ptr_ = std::shared_ptr<char>(new char[size], std::default_delete<char[]>());
+                    copy_size = boost::asio::buffer_copy(boost::asio::buffer(ptr_.get(), size), buffers);
+                }
+            }
 
             void
             operator()(error_code const& ec,
                        std::size_t bytes_transferred)
             {
-                auto size = boost::asio::buffer_size(cb1_);
-                std::cout << "write_some_op - bytes transferred: " << bytes_transferred << " buffer size: " << size << std::endl;   //todo: remove
+                std::cout << "write_some_op - bytes transferred: " << bytes_transferred << " buffer size: " << copy_size << std::endl;   //todo: remove
 
                 switch(ec ? 1 : step)
                 {
                     case 0:
                         step = 1;
-                        return boost::asio::async_write(s_.next_layer(), cb1_, std::move(*this));
+                        if(single_buffer)
+                        {
+                            return boost::asio::async_write(s_.next_layer(), boost::asio::const_buffers_1{*iter}, std::move(*this));
+                        }
+                        else
+                        {
+                            return boost::asio::async_write(s_.next_layer(), boost::asio::const_buffers_1(ptr_.get(), copy_size), std::move(*this));
+                        }
                     default:
                         break;
                 }
