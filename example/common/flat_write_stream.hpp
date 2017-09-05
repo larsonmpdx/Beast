@@ -317,9 +317,11 @@ namespace beast {
                 if(size > 0) {
                     auto iter = find_single(buffers);
                     if(iter != buffers.end()) {
+                        // buffers is already a single part
                         return next_layer_.write_some(boost::asio::const_buffers_1{*iter}, ec);
                     }
                     else {
+                        // buffers contains multiple parts
                         if(size <= max_stack_size) {
                             return next_layer_.write_some(stack_flatten(buffers), ec);
                         } else {
@@ -384,18 +386,26 @@ namespace beast {
                 std::cout << "write_some buffer size: " << size << std::endl;   //todo: remove
 
                 if(size > 0) {
-                    try {
-                        write_some_op<
-                                ConstBufferSequence,
-                                boost::beast::handler_type<
-                                        WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, buffers);
+                    auto iter = find_single(buffers);
+                    if(iter != buffers.end()) {
+                        // buffers is already only a single part
+                        return next_layer_.async_write_some(buffers,
+                                                            std::forward<WriteHandler>(handler));
+                    } else {
+                        try {
+                        // buffers contains multiple parts and needs to be handed off to the composed op to be flattened and written
+                            write_some_op<
+                                    ConstBufferSequence,
+                                    boost::beast::handler_type<
+                                            WriteHandler, void(boost::beast::error_code, std::size_t)>> op(handler, *this, buffers);
 
-                        op(boost::beast::error_code{}, 0);
-                        return;
-                    }
-                    catch (std::bad_alloc const &) {
-                        // todo
-                        return;
+                            op(boost::beast::error_code{}, 0);
+                            return;
+                        }
+                        catch (std::bad_alloc const &) {
+                            // todo
+                            return;
+                        }
                     }
                 }
                 else {
@@ -434,12 +444,9 @@ namespace beast {
         {
             Handler h_;
             flat_write_stream& s_;
-            ConstBufferSequence const& b_;
 
             std::shared_ptr<char> ptr_;
             std::size_t copy_size;
-            typename ConstBufferSequence::const_iterator iter;
-            bool single_buffer;
             int step = 0;
 
         public:
@@ -452,18 +459,10 @@ namespace beast {
                           ConstBufferSequence const& buffers)
                     : h_(std::forward<DeducedHandler>(h))
                     , s_(s)
-                    , b_(buffers)
             {
                 auto size = boost::asio::buffer_size(buffers);
-                iter = find_single(buffers);
-                if(iter != buffers.end()) {
-                    single_buffer = true;
-
-                } else{
-                    single_buffer = false;
-                    ptr_ = std::shared_ptr<char>(new char[size], std::default_delete<char[]>());
-                    copy_size = boost::asio::buffer_copy(boost::asio::buffer(ptr_.get(), size), buffers);
-                }
+                ptr_ = std::shared_ptr<char>(new char[size], std::default_delete<char[]>());
+                copy_size = boost::asio::buffer_copy(boost::asio::buffer(ptr_.get(), size), buffers);
             }
 
             void
@@ -476,14 +475,7 @@ namespace beast {
                 {
                     case 0:
                         step = 1;
-                        if(single_buffer)
-                        {
-                            return boost::asio::async_write(s_.next_layer(), boost::asio::const_buffers_1{*iter}, std::move(*this));
-                        }
-                        else
-                        {
-                            return boost::asio::async_write(s_.next_layer(), boost::asio::const_buffers_1(ptr_.get(), copy_size), std::move(*this));
-                        }
+                        return boost::asio::async_write(s_.next_layer(), boost::asio::const_buffers_1(ptr_.get(), copy_size), std::move(*this));
                     default:
                         break;
                 }
